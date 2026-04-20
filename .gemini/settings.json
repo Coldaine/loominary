@@ -11,17 +11,6 @@
         ]
       }
     ],
-    "AfterModel": [
-      {
-        "hooks": [
-          {
-            "name": "entire-after-model",
-            "type": "command",
-            "command": "entire hooks gemini after-model"
-          }
-        ]
-      }
-    ],
     "AfterTool": [
       {
         "matcher": "*",

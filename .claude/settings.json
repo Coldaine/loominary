@@ -2,7 +2,7 @@
   "hooks": {
     "PostToolUse": [
       {
-        "matcher": "Task",
+        "matcher": "Agent",
         "hooks": [
           {
             "type": "command",
@@ -22,7 +22,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Task",
+        "matcher": "Agent",
         "hooks": [
           {
             "type": "command",
@@ -39,7 +39,8 @@
             "type": "command",
             "command": "entire hooks claude-code session-end"
           }
-        ]
+        ],
+        "timeout": 30000
       }
     ],
     "SessionStart": [
