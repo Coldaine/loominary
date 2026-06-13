@@ -38,7 +38,8 @@
     "deploy:pages": "gh-pages -d build -r https://github.com/Laumss/react.git",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "test:archive": "node tests/archive-contract.test.mjs"
   },
   "eslintConfig": {
     "extends": [
