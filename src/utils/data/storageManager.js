@@ -219,6 +219,26 @@ class StorageManager {
   }
 
   /**
+   * 专用方法：获取注释数据
+   * @param {string} fileUuid - 文件 UUID
+   * @returns {Object} 注释数据
+   */
+  static getAnnotations(fileUuid) {
+    const key = `annotations_${fileUuid}`;
+    return this.get(key, {});
+  }
+
+  /**
+   * 专用方法：保存注释数据
+   * @param {string} fileUuid - 文件 UUID
+   * @param {Object} annotations - 注释数据
+   */
+  static setAnnotations(fileUuid, annotations) {
+    const key = `annotations_${fileUuid}`;
+    return this.set(key, annotations);
+  }
+
+  /**
    * 专用方法：获取配置
    * @param {string} configKey - 配置键
    * @param {Object} defaultValue - 默认配置

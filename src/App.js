@@ -27,6 +27,8 @@ import { getRenameManager } from './utils/data/renameManager.js';
 import { prepareMarkdownExport, downloadMarkdownExport } from './utils/markdownExporter';
 import { pdfExportManager } from './utils/export/pdfExportManager';
 import { useI18n, setResolvedLang } from './index.js';
+import { getArchiveService } from './utils/archive/archiveService.js';
+import { AnnotationManager } from './utils/data/annotationManager';
 
 
 // ==================== 筛选 Hook ====================
@@ -749,6 +751,13 @@ function App() {
   setBrowseAllCardsRef.current = setBrowseAllCards;
   const setBrowseAllCurrentIndexRef = useRef(setBrowseAllCurrentIndex);
   setBrowseAllCurrentIndexRef.current = setBrowseAllCurrentIndex;
+
+  const archiveServiceRef = useRef(getArchiveService());
+  const annotationManagerRef = useRef(null);
+
+  useEffect(() => {
+    annotationManagerRef.current = new AnnotationManager(currentFileUuid);
+  }, [currentFileUuid]);
 
   // 非时间线视图的 view-content 滚动容器 ref（用于自动隐藏顶栏）
   const viewContentRef = useRef(null);
@@ -1770,6 +1779,34 @@ function App() {
       console.error('[Loominary] Export failed:', err);
     }
   };
+
+  const handleArchiveExportClick = useCallback(async () => {
+    if (!processedData) return;
+    try {
+      const annotations = annotationManagerRef.current
+        ? annotationManagerRef.current.getAnnotations()
+        : null;
+      const archive = archiveServiceRef.current.importParsedData({
+        parsedData: processedData,
+        exportContext: pendingExportContext,
+        annotations,
+        source: 'local'
+      });
+      const json = JSON.stringify(archive, null, 2);
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const safeName = (archive.conversations?.[0]?.title || 'conversation').replace(/[<>:"\/\\|?*\x00-\x1F]/g, '') || 'conversation';
+      a.download = `${safeName}.loominary.archive.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('[Loominary] Archive export failed:', err);
+    }
+  }, [processedData, pendingExportContext]);
 
   const handlePdfExportClick = async () => {
     if (!processedData || pdfProgress !== null) return;
