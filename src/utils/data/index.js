@@ -5,6 +5,7 @@ export { StatsCalculator } from './statsCalculator';
 export { DataProcessor } from './dataProcessor';
 export { MarkManager, getFileMarks } from './markManager';
 export { StarManager } from './starManager';
+export { AnnotationManager, getFileAnnotations } from './annotationManager';
 export {
   generateFileHash,
   generateFileCardUuid,
