@@ -215,13 +215,13 @@ Planned endpoints:
 Example service start:
 
 ```bash
-node server/loominary-local-service.mjs --archive ./tests/fixtures/archive-v1 --port 3788
+node server/loominary-local-service.mjs --archive /path/to/your/archive --port 3788
 ```
 
 Optional auth:
 
 ```bash
-LOOMINARY_LOCAL_TOKEN=dev-token node server/loominary-local-service.mjs --archive ./tests/fixtures/archive-v1
+LOOMINARY_LOCAL_TOKEN=dev-token node server/loominary-local-service.mjs --archive /path/to/your/archive
 ```
 
 ## MCP-Style Surface

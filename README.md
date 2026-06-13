@@ -100,4 +100,4 @@ Loominary is a ground-up rewrite of the original Lyra Exporter. The old codebase
 
 ## Contributing
 
-A contributing guide and development roadmap are on the way. In the meantime, if you have any idea, please [open an discussion](https://github.com/Laumss/Loominary/discussions).
+A contributing guide and development roadmap are on the way. In the meantime, if you have any idea, please [open a discussion](https://github.com/Laumss/Loominary/discussions).
