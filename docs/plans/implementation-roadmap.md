@@ -42,6 +42,7 @@ Planned work:
 
 - Land the consolidated `docs/plans` PR.
 - Record legacy feature disposition in `legacy-feature-audit.md`.
+- Add the first browser-side mapper from normalized parser output to archive v1 records.
 - Fix duplicate documentation and review comments before reviving feature branches.
 - Decide which old Lyra capabilities serve the archive-first purpose.
 - Keep non-archive workspace features out of Sprint 1 and Sprint 2.
@@ -50,6 +51,7 @@ Acceptance checks:
 
 - README points to `docs/plans` but does not carry implementation planning.
 - Legacy fork findings have explicit keep/rebuild/defer/drop decisions.
+- `src/utils/archive/archiveContract.js` can build v1 conversation, context, and annotation records from normalized parser output.
 - Sprint 1 can be reviewed without old duplicate docs.
 - Sprint 2 can focus on the local archive/service rather than UI feature sprawl.
 
@@ -97,7 +99,7 @@ Goal: close the biggest gap in the Sprint 2 branch: archive creation is not auto
 
 Planned work:
 
-- Map normalized parser output to `loominary.conversation/v1`.
+- Expand the initial normalized parser mapper into the browser-to-archive write path.
 - Map favorites and message marks to `loominary.annotations/v1`.
 - Map project descriptions, instructions, memories, saved memories, and knowledge-file metadata to `loominary.context/v1`.
 - Add an export/write path that can create or update an archive root.

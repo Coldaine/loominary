@@ -254,6 +254,8 @@ Consumers should:
 - detected branches -> `branches`
 - export-time project/memory payloads -> `contexts/<conversation-id>.json`
 
+Initial browser-side mapping lives in `src/utils/archive/archiveContract.js`. It mirrors the v1 service contract so Sprint 2 can consume the same record shape that the current parser layer emits.
+
 ## Current Limitations
 
 - Archive creation is not yet automated from the browser app.
@@ -264,9 +266,9 @@ Consumers should:
 
 ## Next Implementation Steps
 
-1. Land the browser app refactor so archive writing can hook into clean import/export seams.
-2. Rebase or rebuild the service branch on top of the refactor.
-3. Add archive fixtures for representative provider exports.
+1. Add generated archive fixtures for representative Claude, ChatGPT, Grok, Gemini, and SillyTavern parser outputs.
+2. Land the browser app refactor so archive writing can hook into clean import/export seams.
+3. Rebase or rebuild the service branch on top of the refactor and browser-side contract mapper.
 4. Implement browser-to-archive writing.
 5. Add tests that compare generated archive records against the v1 contract.
 6. Add file watching or persisted indexes only after the source-of-truth contract is stable.
