@@ -2,6 +2,7 @@ export const ARCHIVE_SCHEMA_VERSION = 'loominary.archive/v1';
 export const CONVERSATION_SCHEMA_VERSION = 'loominary.conversation/v1';
 export const CONTEXT_SCHEMA_VERSION = 'loominary.context/v1';
 export const ANNOTATIONS_SCHEMA_VERSION = 'loominary.annotations/v1';
+export const RAW_CAPTURE_SCHEMA_VERSION = 'loominary.capture.raw/v1';
 
 export const ROOT_MESSAGE_UUID = '00000000-0000-4000-8000-000000000000';
 
@@ -53,6 +54,13 @@ const asText = (value) => {
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
   return safeStringify(value);
 };
+
+const normalizeWhitespace = (value) => asText(value)
+  .replace(/\r\n/g, '\n')
+  .replace(/[ \t]+\n/g, '\n')
+  .replace(/\n{3,}/g, '\n\n')
+  .replace(/[ \t]{2,}/g, ' ')
+  .trim();
 
 const toArchiveDate = (value) => {
   if (!value) return null;
@@ -136,6 +144,15 @@ const normalizeRole = (sender) => {
   const value = String(sender || '').toLowerCase();
   if (value === 'human' || value === 'user') return 'user';
   if (value === 'assistant' || value === 'ai' || value === 'bot') return 'assistant';
+  if (value === 'system') return 'system';
+  if (value === 'tool') return 'tool';
+  return value || 'assistant';
+};
+
+const normalizeCaptureRole = (role) => {
+  const value = String(role || '').toLowerCase();
+  if (['human', 'user', 'me'].includes(value)) return 'human';
+  if (['assistant', 'ai', 'model', 'claude', 'chatgpt'].includes(value)) return 'assistant';
   if (value === 'system') return 'system';
   if (value === 'tool') return 'tool';
   return value || 'assistant';
@@ -631,6 +648,248 @@ export function buildArchiveBundle(processedData, options = {}) {
     context,
     annotations
   };
+}
+
+const normalizeCaptureImage = (image, index) => compactRecord({
+  id: image.id || image.uuid || buildStableArchiveId('img', [image.src || image.url, image.alt, index]),
+  alt: image.alt,
+  url: image.url || image.src,
+  source: image.source || 'visible-dom',
+  width: image.width,
+  height: image.height,
+  original_src: image.original_src || image.src || image.url
+});
+
+const normalizeCaptureAttachment = (attachment, index) => compactRecord({
+  id: attachment.id || attachment.uuid || buildStableArchiveId('att', [attachment.name, attachment.url, index]),
+  name: attachment.name || attachment.fileName || attachment.title,
+  link: attachment.link || attachment.url || attachment.href,
+  file_type: attachment.fileType || attachment.mimeType || attachment.type,
+  text: attachment.text
+});
+
+const getCaptureConversationId = (snapshot) => {
+  const direct = snapshot.conversationId || snapshot.conversation?.id;
+  if (direct) return asText(direct);
+
+  const url = snapshot.conversationUrl || snapshot.url || snapshot.capturedUrl;
+  const provider = snapshot.provider || snapshot.platform;
+  return buildStableArchiveId('conv', [provider, url, snapshot.title]);
+};
+
+const buildCaptureMessageId = (snapshot, message, index, conversationId) => {
+  const direct = message.id || message.messageId || message.domId;
+  if (direct) return asText(direct);
+
+  const text = normalizeWhitespace(message.text || message.markdown || message.content);
+  const previous = snapshot.messages?.[index - 1];
+  const next = snapshot.messages?.[index + 1];
+  return buildStableArchiveId('msg', [
+    snapshot.provider,
+    conversationId,
+    normalizeCaptureRole(message.role),
+    text,
+    normalizeWhitespace(previous?.text || '').slice(0, 80),
+    normalizeWhitespace(next?.text || '').slice(0, 80),
+    index
+  ]);
+};
+
+export function validateRawCaptureSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object') {
+    throw new Error('Raw capture snapshot must be an object.');
+  }
+
+  if (snapshot.schemaVersion && snapshot.schemaVersion !== RAW_CAPTURE_SCHEMA_VERSION) {
+    throw new Error(`Unsupported raw capture schema version: ${snapshot.schemaVersion}`);
+  }
+
+  if (!snapshot.provider || typeof snapshot.provider !== 'string') {
+    throw new Error('Raw capture snapshot is missing provider.');
+  }
+
+  if (!Array.isArray(snapshot.messages)) {
+    throw new Error('Raw capture snapshot is missing messages.');
+  }
+
+  return snapshot;
+}
+
+export function rawCaptureToProcessedData(snapshot) {
+  validateRawCaptureSnapshot(snapshot);
+
+  const provider = String(snapshot.provider).toLowerCase();
+  const platform = String(snapshot.platform || provider).toLowerCase();
+  const conversationId = getCaptureConversationId(snapshot);
+  const sourceIdToArchiveId = new Map();
+  const chatHistory = snapshot.messages.map((message, index) => {
+    const uuid = buildCaptureMessageId(snapshot, message, index, conversationId);
+    sourceIdToArchiveId.set(message.id || message.messageId || message.domId || index, uuid);
+    return compactRecord({
+      index,
+      uuid,
+      parent_uuid: message.parentId || message.parentUuid || null,
+      sender: normalizeCaptureRole(message.role),
+      sender_label: message.senderLabel || (normalizeCaptureRole(message.role) === 'human' ? 'User' : provider === 'claude' ? 'Claude' : 'ChatGPT'),
+      timestamp: toArchiveDate(message.timestamp || message.createdAt || snapshot.capturedAt),
+      display_text: normalizeWhitespace(message.markdown || message.text || message.content),
+      branch_id: message.branchId || message.branch?.id || 'main',
+      branch_level: message.branchLevel,
+      is_branch_point: Boolean(message.isBranchPoint || message.branchEvidence?.length),
+      attachments: (message.attachments || []).map(normalizeCaptureAttachment),
+      images: (message.images || []).map(normalizeCaptureImage),
+      citations: message.links || message.citations,
+      tools: message.tools,
+      artifacts: message.artifacts,
+      capture_warnings: message.warnings,
+      metadata: compactRecord({
+        domPath: message.domPath,
+        branchEvidence: message.branchEvidence,
+        extractionSource: 'visible-dom'
+      })
+    });
+  }).map((message, index, messages) => {
+    if (message.parent_uuid) {
+      const mappedParent = sourceIdToArchiveId.get(message.parent_uuid);
+      return { ...message, parent_uuid: mappedParent || message.parent_uuid };
+    }
+
+    if (index > 0 && !message.parent_uuid) {
+      return { ...message, parent_uuid: messages[index - 1].uuid };
+    }
+
+    return message;
+  });
+
+  return {
+    format: platform,
+    platform,
+    meta_info: compactRecord({
+      title: snapshot.title || 'Captured conversation',
+      uuid: conversationId,
+      created_at: toArchiveDate(snapshot.createdAt || snapshot.capturedAt),
+      updated_at: toArchiveDate(snapshot.capturedAt),
+      platform,
+      provider,
+      source_url: snapshot.conversationUrl || snapshot.url || snapshot.capturedUrl,
+      capture: compactRecord({
+        schemaVersion: RAW_CAPTURE_SCHEMA_VERSION,
+        capturedAt: toArchiveDate(snapshot.capturedAt),
+        capturedUrl: snapshot.capturedUrl || snapshot.url,
+        conversationUrl: snapshot.conversationUrl,
+        warnings: snapshot.warnings || [],
+        incomplete: Boolean(snapshot.incomplete)
+      })
+    }),
+    chat_history: chatHistory
+  };
+}
+
+export function buildArchiveBundleFromCapture(snapshot, options = {}) {
+  const processedData = rawCaptureToProcessedData(snapshot);
+  const bundle = buildArchiveBundle(processedData, {
+    ...options,
+    archiveId: options.archiveId || `loominary-${processedData.platform}-dom-capture`,
+    provider: processedData.meta_info.provider,
+    conversationId: processedData.meta_info.uuid,
+    providerConversationId: snapshot.conversationId || snapshot.conversation?.id || null,
+    title: processedData.meta_info.title,
+    createdAt: processedData.meta_info.created_at,
+    updatedAt: processedData.meta_info.updated_at,
+    exportContext: options.exportContext || snapshot.context || {}
+  });
+
+  bundle.conversation.conversation.capture = processedData.meta_info.capture;
+  bundle.conversation.messages = bundle.conversation.messages.map((message, index) => {
+    const sourceMessage = processedData.chat_history[index] || {};
+    return compactRecord({
+      ...message,
+      metadata: compactRecord({
+        ...message.metadata,
+        ...sourceMessage.metadata,
+        captureWarnings: sourceMessage.capture_warnings
+      })
+    });
+  });
+
+  return bundle;
+}
+
+export function archiveConversationToProcessedData(conversationRecord, contextRecord = null) {
+  validateConversationRecord(conversationRecord);
+  const conversation = conversationRecord.conversation || {};
+  const messages = (conversationRecord.messages || []).map((message, index) => compactRecord({
+    index,
+    uuid: message.id,
+    parent_uuid: message.parentId,
+    sender: message.role === 'user' ? 'human' : message.role,
+    sender_label: message.role === 'user' ? 'User' : message.role === 'assistant' ? (conversation.platform === 'claude' ? 'Claude' : 'Assistant') : message.role,
+    timestamp: message.createdAt,
+    display_text: message.text || (message.content || []).filter(block => block.type === 'text').map(block => block.text).join('\n'),
+    branch_id: message.branchId || 'main',
+    attachments: (message.content || []).filter(block => block.type === 'attachment'),
+    images: (message.content || []).filter(block => block.type === 'image'),
+    citations: (message.content || []).filter(block => block.type === 'citation'),
+    tools: (message.content || []).filter(block => block.type === 'tool'),
+    artifacts: (message.content || []).filter(block => block.type === 'artifact'),
+    thinking: (message.content || []).find(block => block.type === 'thinking')?.text,
+    metadata: message.metadata
+  }));
+
+  return {
+    format: conversation.platform || 'archive',
+    platform: conversation.platform || 'archive',
+    meta_info: compactRecord({
+      title: conversation.title,
+      uuid: conversation.id,
+      created_at: conversation.createdAt,
+      updated_at: conversation.updatedAt,
+      platform: conversation.platform,
+      provider: conversation.provider,
+      provider_conversation_id: conversation.providerConversationId,
+      capture: conversation.capture,
+      context: contextRecord || null
+    }),
+    chat_history: messages
+  };
+}
+
+export function normalizeArchivePayload(payload, options = {}) {
+  if (!payload || typeof payload !== 'object') {
+    throw new Error('Archive payload must be an object.');
+  }
+
+  if (payload.schemaVersion === RAW_CAPTURE_SCHEMA_VERSION || Array.isArray(payload.messages)) {
+    const bundle = buildArchiveBundleFromCapture(payload, options);
+    return {
+      type: 'captureSnapshot',
+      bundle,
+      processedData: archiveConversationToProcessedData(bundle.conversation, bundle.context)
+    };
+  }
+
+  if (payload.conversation?.schemaVersion === CONVERSATION_SCHEMA_VERSION) {
+    return {
+      type: 'archiveBundle',
+      bundle: payload,
+      processedData: archiveConversationToProcessedData(payload.conversation, payload.context)
+    };
+  }
+
+  if (payload.schemaVersion === CONVERSATION_SCHEMA_VERSION) {
+    return {
+      type: 'conversationRecord',
+      bundle: {
+        manifest: buildArchiveManifest(options),
+        conversation: payload,
+        context: null,
+        annotations: buildAnnotationsArchive({ conversationId: payload.conversation.id })
+      },
+      processedData: archiveConversationToProcessedData(payload)
+    };
+  }
+
+  throw new Error('Unsupported archive payload.');
 }
 
 export function validateManifest(manifest) {

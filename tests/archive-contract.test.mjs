@@ -128,4 +128,85 @@ assert.ok(bundle.annotations.tags.some(tag => tag.tag === 'important' && tag.mes
 assert.ok(bundle.annotations.tags.some(tag => tag.tag === 'completed' && tag.messageId === 'msg-2'));
 assert.ok(bundle.annotations.tags.some(tag => tag.tag === 'research' && !tag.messageId));
 
+const chatgptSnapshot = {
+  schemaVersion: archive.RAW_CAPTURE_SCHEMA_VERSION,
+  provider: 'chatgpt',
+  platform: 'chatgpt',
+  capturedAt: '2026-06-14T10:00:00.000Z',
+  capturedUrl: 'https://chatgpt.com/c/dom-alpha',
+  conversationUrl: 'https://chatgpt.com/c/dom-alpha',
+  conversationId: 'dom-alpha',
+  title: 'DOM capture fixture',
+  warnings: ['Captured from visible DOM only.'],
+  messages: [
+    {
+      role: 'user',
+      id: 'dom-user-1',
+      text: 'Please inspect this image.',
+      images: [{ src: 'https://example.test/image.png', alt: 'diagram', width: 640, height: 320 }],
+      attachments: [{ name: 'notes.txt', url: 'https://example.test/notes.txt' }]
+    },
+    {
+      role: 'assistant',
+      text: 'The visible diagram shows an archive pipeline.',
+      branchEvidence: ['Regenerate response'],
+      warnings: ['Branch selector was visible, exact hidden branches were not captured.']
+    }
+  ]
+};
+
+const chatgptBundle = archive.buildArchiveBundleFromCapture(chatgptSnapshot);
+const chatgptBundleAgain = archive.buildArchiveBundleFromCapture(chatgptSnapshot);
+
+archive.validateConversationRecord(chatgptBundle.conversation);
+archive.validateContextRecord(chatgptBundle.context);
+archive.validateAnnotations(chatgptBundle.annotations);
+
+assert.equal(chatgptBundle.conversation.conversation.id, 'dom-alpha');
+assert.equal(chatgptBundle.conversation.conversation.platform, 'chatgpt');
+assert.equal(chatgptBundle.conversation.conversation.provider, 'chatgpt');
+assert.equal(chatgptBundle.conversation.conversation.capture.warnings[0], 'Captured from visible DOM only.');
+assert.deepEqual(
+  chatgptBundle.conversation.messages.map(message => message.id),
+  chatgptBundleAgain.conversation.messages.map(message => message.id)
+);
+assert.equal(chatgptBundle.conversation.messages[0].content.some(block => block.type === 'image'), true);
+assert.equal(chatgptBundle.conversation.messages[0].content.some(block => block.type === 'attachment'), true);
+assert.equal(chatgptBundle.conversation.messages[1].metadata.branchEvidence[0], 'Regenerate response');
+assert.equal(chatgptBundle.conversation.messages[1].metadata.captureWarnings[0], 'Branch selector was visible, exact hidden branches were not captured.');
+
+const claudeSnapshot = {
+  schemaVersion: archive.RAW_CAPTURE_SCHEMA_VERSION,
+  provider: 'claude',
+  platform: 'claude',
+  capturedAt: '2026-06-14T11:00:00.000Z',
+  capturedUrl: 'https://claude.ai/chat/claude-dom',
+  conversationUrl: 'https://claude.ai/chat/claude-dom',
+  conversationId: 'claude-dom',
+  title: 'Claude DOM fixture',
+  context: {
+    projectInfo: {
+      uuid: 'visible-project',
+      name: 'Visible Project',
+      instructions: 'Only visible instructions are captured.'
+    }
+  },
+  messages: [
+    { role: 'user', text: 'Show the rendered artifact.' },
+    {
+      role: 'assistant',
+      text: 'Here is the rendered artifact.',
+      artifacts: [{ title: 'hello.js', type: 'code', content: 'console.log("hello");' }]
+    }
+  ]
+};
+
+const claudeBundle = archive.buildArchiveBundleFromCapture(claudeSnapshot);
+const claudeProcessed = archive.archiveConversationToProcessedData(claudeBundle.conversation, claudeBundle.context);
+
+assert.equal(claudeBundle.context.project.name, 'Visible Project');
+assert.equal(claudeBundle.conversation.messages[1].content.some(block => block.type === 'artifact'), true);
+assert.equal(claudeProcessed.chat_history.length, 2);
+assert.equal(claudeProcessed.chat_history[1].artifacts[0].title, 'hello.js');
+
 console.log('Archive contract mapper smoke test passed.');

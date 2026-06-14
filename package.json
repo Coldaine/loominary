@@ -39,7 +39,8 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
-    "test:archive": "node tests/archive-contract.test.mjs"
+    "test:archive": "node tests/archive-contract.test.mjs",
+    "test:capture": "node tests/archive-contract.test.mjs"
   },
   "eslintConfig": {
     "extends": [

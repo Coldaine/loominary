@@ -330,6 +330,7 @@ def build_userscript(platforms=None):
 
     adapter_code = read_file(src_dir / 'userscript-adapter.js')
     common_base_code = read_file(src_dir / 'common-base.js')
+    capture_core_code = read_file(src_dir / 'capture-core.js')
     markdown_core_code = read_file(src_dir / 'markdown-core.js')
     common_ui_code = read_file(src_dir / 'common-ui.js')
 
@@ -363,6 +364,8 @@ def build_userscript(platforms=None):
         adapter_code,
         "",
         common_base_code,
+        "",
+        capture_core_code,
         "",
         markdown_core_code,
         ""
@@ -577,7 +580,7 @@ def build_extension(platforms=None):
                     'run_at': 'document_start'
                 }]
 
-            # web_accessible_resources：追加 matches（injected.js 需要对所有平台可访问）
+            # web_accessible_resources：追加 matches
             # 注意：web_accessible_resources 的 matches 必须是顶级 /* pattern，
             # 子路径（如 /i/grok/*）在某些 Chrome 版本会触发 Invalid match pattern 错误
             for war in manifest.get('web_accessible_resources', []):
@@ -601,6 +604,7 @@ def build_extension(platforms=None):
     # 2. 读取源代码
     adapter_code = read_file(src_dir / 'extension-adapter.js')
     common_base_code = read_file(src_dir / 'common-base.js')
+    capture_core_code = read_file(src_dir / 'capture-core.js')
     markdown_core_code = read_file(src_dir / 'markdown-core.js')
     common_ui_code = read_file(src_dir / 'common-ui.js')
 
@@ -637,26 +641,11 @@ def build_extension(platforms=None):
         "    if (window.loominaryFetchInitialized) return;",
         "    window.loominaryFetchInitialized = true;",
         "",
-        "    // 注入页面上下文脚本（用于拦截 fetch/XHR）",
-        "    const script = document.createElement('script');",
-        "    script.src = chrome.runtime.getURL('injected.js');",
-        "    script.onload = function() { this.remove(); };",
-        "    (document.head || document.documentElement).appendChild(script);",
-        "",
-        "    // 监听来自注入脚本的消息",
-        "    window.addEventListener('message', (event) => {",
-        "        if (event.source !== window) return;",
-        "        if (event.data.type === 'LOOMINARY_USER_ID_CAPTURED') {",
-        "            localStorage.setItem('claudeUserId', event.data.userId);",
-        "        }",
-        "        if (event.data.type === 'LOOMINARY_TOKEN_CAPTURED') {",
-        "            localStorage.setItem('chatGPTToken', event.data.token);",
-        "        }",
-        "    });",
-        "",
         adapter_code,
         "",
         common_base_code,
+        "",
+        capture_core_code,
         "",
         markdown_core_code,
         "",

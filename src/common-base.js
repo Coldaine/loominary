@@ -97,13 +97,6 @@
             })(),
             isPanelCollapsed: localStorage.getItem('exporterCollapsed') !== 'false',
             includeImages: localStorage.getItem('includeImages') === 'true',
-            capturedUserId: localStorage.getItem('claudeUserId') || '',
-            // #platform: chatgpt
-            chatgptAccessToken: null,
-            chatgptUserId: localStorage.getItem('chatGPTUserId') || '',
-            chatgptWorkspaceId: localStorage.getItem('chatGPTWorkspaceId') || '',
-            chatgptWorkspaceType: localStorage.getItem('chatGPTWorkspaceType') || 'user',
-            // #endplatform
             panelInjected: false,
             // #platform: chatgpt,copilot
             includeCanvas: localStorage.getItem('includeCanvas') === 'true'
@@ -561,13 +554,6 @@
 
                 // Extension mode: open side panel via background service worker
                 try {
-                    if (State.capturedUserId) {
-                        chrome.storage.local.set({ loominary_browse_context: {
-                            baseUrl: window.location.origin,
-                            userId: State.capturedUserId
-                        }});
-                    }
-
                     // Detect page theme and sync lang before opening tab
                     const _extPageTheme = getComputedStyle(document.documentElement).getPropertyValue('color-scheme').trim();
                     const _extDetectedTheme = (_extPageTheme === 'light') ? 'light' : 'dark';
