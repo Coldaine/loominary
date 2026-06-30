@@ -18,7 +18,7 @@ This audit keeps the pivot honest. Older Lyra-line forks preserve useful ideas, 
 
 ## Fork Read
 
-The newer Loominary forks mostly track upstream `main` and do not add meaningful product features. The old Lyra-line forks contain more features, but they represent the pre-rewrite architecture that upstream said had become brittle.
+The newer Loominary forks appear to largely track upstream `main` based on cursory review, and no meaningful product-feature additions were identified during this audit. The old Lyra-line forks contain more features, but they represent the pre-rewrite architecture that upstream said had become brittle.
 
 Most useful reference repo: `cristiannegru/lyra-exporter`.
 
