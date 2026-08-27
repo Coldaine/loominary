@@ -82,6 +82,8 @@ Tags, memories, project instructions, conversation history—anything Loominary 
 
 This is still taking shape. While the architecture supports it, the integration surface is still in its early stages. If you're interested in building on top of this—or have ideas about how to bridge Loominary with other AI clients—[open an issue](https://github.com/Laumss/Loominary/issues) and let's figure it out together.
 
+The working plans are consolidated in [`docs/plans`](docs/plans/README.md).
+
 -----
 
 ## Privacy
@@ -98,4 +100,4 @@ Loominary is a ground-up rewrite of the original Lyra Exporter. The old codebase
 
 ## Contributing
 
-A contributing guide and development roadmap are on the way. In the meantime, if you have any idea, please [open an discussion](https://github.com/Laumss/Loominary/discussions).
+A contributing guide and development roadmap are on the way. In the meantime, if you have any idea, please [open a discussion](https://github.com/Laumss/Loominary/discussions).

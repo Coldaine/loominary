@@ -27,9 +27,22 @@ import { getRenameManager } from './utils/data/renameManager.js';
 import { prepareMarkdownExport, downloadMarkdownExport } from './utils/markdownExporter';
 import { pdfExportManager } from './utils/export/pdfExportManager';
 import { useI18n, setResolvedLang } from './index.js';
+import {
+  normalizeArchivePayload
+} from './utils/archive';
 
 
 // ==================== 筛选 Hook ====================
+const sanitizeLocalFilename = (value, fallback = 'conversation') => {
+  const cleaned = String(value || fallback)
+    .replace(/[<>:"/\\|?*]/g, '')
+    .split('')
+    .filter(char => char.charCodeAt(0) >= 32)
+    .join('')
+    .trim();
+  return cleaned || fallback;
+};
+
 const useFullExportCardFilter = (conversations = [], operatedUuids = new Set(), enabled = true, starManagerRef = null, starredMap = null) => {
   const [filters, setFilters] = useState({
     name: '',
@@ -268,8 +281,29 @@ const useFileManager = () => {
   const [fileMetadata, setFileMetadata] = useState({});
   const [loadingProgress, setLoadingProgress] = useState({ current: 0, total: 0 });
 
+  const buildArchiveEntry = useCallback((payload, fallbackName = 'loominary-capture.json') => {
+    const normalized = normalizeArchivePayload(payload);
+    const processed = detectBranches(normalized.processedData);
+    const conversation = normalized.bundle?.conversation?.conversation || {};
+    const filename = `${sanitizeLocalFilename(conversation.title || fallbackName, 'loominary-capture')}.loominary.json`;
+    const serialized = JSON.stringify(normalized.bundle || payload);
+
+    return {
+      name: filename,
+      size: serialized.length,
+      type: 'application/loominary-archive+json',
+      lastModified: conversation.updatedAt ? new Date(conversation.updatedAt).getTime() : Date.now(),
+      _archiveBundle: normalized.bundle,
+      _archiveProcessedData: processed,
+      text: async () => serialized
+    };
+  }, []);
+
   // 智能解析文件（JSON或JSONL）
   const parseFile = useCallback(async (file) => {
+    if (file._archiveProcessedData) {
+      return file._archiveProcessedData;
+    }
     const text = await file.text();
     const isJSONL = file.name.endsWith('.jsonl') || (text.includes('\n{') && !text.trim().startsWith('['));
     return isJSONL ? parseJSONL(text) : JSON.parse(text);
@@ -290,6 +324,9 @@ const useFileManager = () => {
       if (file._mergedProcessedData) {
         console.log('[Loominary] 使用预处理的合并数据');
         setProcessedData(file._mergedProcessedData);
+      } else if (file._archiveProcessedData) {
+        console.log('[Loominary] 使用 DOM capture archive 数据');
+        setProcessedData(file._archiveProcessedData);
       } else {
         console.log('[Loominary processCurrentFile] parsing file:', file.name, file.size, 'bytes');
         const jsonData = await parseFile(file);
@@ -321,7 +358,10 @@ const useFileManager = () => {
   // 加载文件
   const loadFiles = useCallback(async (fileList, { replace = false } = {}) => {
     const validFiles = fileList.filter(f =>
-      f.name.endsWith('.json') || f.name.endsWith('.jsonl') || f.type === 'application/json'
+      f._archiveProcessedData ||
+      f.name.endsWith('.json') ||
+      f.name.endsWith('.jsonl') ||
+      f.type === 'application/json'
     );
     if (!validFiles.length) {
       setError('未找到有效的JSON/JSONL文件');
@@ -349,7 +389,8 @@ const useFileManager = () => {
       const batch = newFiles.slice(i, i + BATCH_SIZE);
       const results = await Promise.all(batch.map(async (file) => {
         try {
-          const data = extractChatData(await parseFile(file), file.name);
+          const parsed = await parseFile(file);
+          const data = file._archiveProcessedData ? parsed : extractChatData(parsed, file.name);
           return [file.name, {
             format: data.format,
             platform: data.platform || data.format,
@@ -396,6 +437,11 @@ const useFileManager = () => {
     if (replace) setCurrentFileIndex(0);
     setError(null);
   }, [files, checkCompatibility, parseFile]);
+
+  const loadArchivePayloads = useCallback(async (payloads, { replace = false } = {}) => {
+    const entries = payloads.map((payload, index) => buildArchiveEntry(payload, `loominary-capture-${index + 1}.json`));
+    await loadFiles(entries, { replace });
+  }, [buildArchiveEntry, loadFiles]);
 
   // 按对话分组（基于 integrity, main_chat, 或 chat_id_hash）
   const groupByConversation = useCallback((filesData) => {
@@ -666,13 +712,14 @@ const useFileManager = () => {
 
   const actions = useMemo(() => ({
     loadFiles,
+    loadArchivePayloads,
     loadMergedJSONLFiles,
     removeFile,
     switchFile,
     reorderFiles,
     confirmReplaceFiles,
     cancelReplaceFiles
-  }), [loadFiles, loadMergedJSONLFiles, removeFile, switchFile, reorderFiles, confirmReplaceFiles, cancelReplaceFiles]);
+  }), [loadFiles, loadArchivePayloads, loadMergedJSONLFiles, removeFile, switchFile, reorderFiles, confirmReplaceFiles, cancelReplaceFiles]);
 
   return {
     files,
@@ -1181,7 +1228,7 @@ function App() {
         setHasZipData(true);
         const zipFiles = cards.map(card => {
           const blob = new Blob([card._zipData], { type: 'application/json' });
-          const safeName = (card.name || card.uuid).replace(/[<>:"\/\\|?*\x00-\x1F]/g, '') + '.json';
+          const safeName = sanitizeLocalFilename(card.name || card.uuid) + '.json';
           return new File([blob], safeName, { type: 'application/json', lastModified: Date.now() });
         });
         if (zipFiles.length > 0) fileActionsRef.current.loadFiles(zipFiles);
@@ -1224,72 +1271,20 @@ function App() {
   }, []);
 
   const handleCardSelect = useCallback(async (item) => {
-    const ctx = browseAllContextRef.current;
-
-    const fetchViaProxy = (url) => {
-      if (typeof chrome !== 'undefined' && chrome.runtime?.id) {
-        return new Promise(resolve =>
-          chrome.runtime.sendMessage({ type: 'LOOMINARY_FETCH', options: { url, method: 'GET', responseType: 'json' } }, resolve)
-        );
-      }
-      return fetch(url, { credentials: 'include' }).then(r => r.ok ? r.json().then(data => ({ success: true, data })) : { success: false });
-    };
-
     try {
       let jsonString;
 
       if (item._zipData) {
         // zip 导入模式：直接使用本地数据
         jsonString = item._zipData;
-      } else if (ctx?.userId && ctx?.baseUrl) {
-        // API 模式：从远端获取
-        const treeMode = document.getElementById('loominary-tree-mode-switch')?.checked ?? true;
-        const convUrl = treeMode
-          ? `${ctx.baseUrl}/api/organizations/${ctx.userId}/chat_conversations/${item.uuid}?tree=True&rendering_mode=messages&render_all_tools=true`
-          : `${ctx.baseUrl}/api/organizations/${ctx.userId}/chat_conversations/${item.uuid}`;
-        console.log('[Loominary] Fetching conversation via proxy:', convUrl);
-        const resp = await fetchViaProxy(convUrl);
-        if (!resp?.success) {
-          console.error('[Loominary] Failed to fetch conversation:', item.uuid, resp?.status, resp?.error);
-          return;
-        }
-        const data = resp.data;
-        if (item.project_uuid) data.project_uuid = item.project_uuid;
-        if (item.project) data.project = item.project;
-        jsonString = JSON.stringify(data, null, 2);
-
-        // 获取 System Context（项目信息 + 用户记忆）
-        try {
-          const exportCtx = { projectInfo: null, userMemory: null };
-          // 用户记忆
-          const [profileResp, memResp] = await Promise.all([
-            fetchViaProxy(`${ctx.baseUrl}/api/account_profile`),
-            fetchViaProxy(`${ctx.baseUrl}/api/organizations/${ctx.userId}/memory`)
-          ]);
-          exportCtx.userMemory = {
-            preferences: profileResp?.success ? (profileResp.data?.conversation_preferences || '') : '',
-            memories: memResp?.success ? (memResp.data?.memory || '') : ''
-          };
-          // 项目信息
-          if (item.project_uuid) {
-            const [detailResp, projMemResp] = await Promise.all([
-              fetchViaProxy(`${ctx.baseUrl}/api/organizations/${ctx.userId}/projects/${item.project_uuid}`),
-              fetchViaProxy(`${ctx.baseUrl}/api/organizations/${ctx.userId}/memory?project_uuid=${item.project_uuid}`)
-            ]);
-            exportCtx.projectInfo = {
-              name: item.project?.name || '',
-              uuid: item.project_uuid,
-              description: detailResp?.success ? (detailResp.data?.description || '') : '',
-              instructions: detailResp?.success ? (detailResp.data?.prompt_template || '') : '',
-              memory: projMemResp?.success ? (projMemResp.data?.memory || '') : ''
-            };
-          }
-          setPendingExportContext(exportCtx);
-        } catch (ctxErr) {
-          console.warn('[Loominary] Failed to fetch export context:', ctxErr);
-        }
+      } else if (item._archiveBundle) {
+        const newFileIdx = files.length;
+        pendingSelectIndexRef.current = newFileIdx;
+        fileActionsRef.current.loadArchivePayloads([item._archiveBundle]);
+        switchToTimeline(newFileIdx, null);
+        return;
       } else {
-        console.error('[Loominary] No zip data and no API context for card:', item.uuid);
+        console.error('[Loominary] No local archive data for card:', item.uuid);
         return;
       }
 
@@ -1310,7 +1305,7 @@ function App() {
       }
 
       const parsed = JSON.parse(jsonString);
-      const filename = `${(parsed.name || item.name || item.uuid).replace(/[<>:"\/\\|?*\x00-\x1F]/g, '')}.json`;
+      const filename = `${sanitizeLocalFilename(parsed.name || item.name || item.uuid)}.json`;
 
       // 允许重新加载
       dataLoadedRef.current = false;
@@ -1339,42 +1334,8 @@ function App() {
   }, [switchToTimeline, files, sortedBrowseCards]);
 
   const handleBrowseAllExport = useCallback(async () => {
-    const ctx = browseAllContextRef.current || {};
-
     const toExport = browseAllCards;
     if (toExport.length === 0) return;
-
-    const fetchViaProxy = (url) => {
-      if (typeof chrome !== 'undefined' && chrome.runtime?.id) {
-        return new Promise(resolve =>
-          chrome.runtime.sendMessage({ type: 'LOOMINARY_FETCH', options: { url, method: 'GET', responseType: 'json' } }, resolve)
-        );
-      }
-      return fetch(url, { credentials: 'include' }).then(r => r.ok ? r.json().then(data => ({ success: true, data })) : { success: false });
-    };
-
-    let includeProjectInfo = true, includeUserMemory = true;
-    if (typeof chrome !== 'undefined' && chrome.storage?.local) {
-      try {
-        const cfg = await new Promise(resolve =>
-          chrome.storage.local.get(['loominary_export_config'], r => resolve(r.loominary_export_config || {}))
-        );
-        includeProjectInfo = cfg.includeProjectInfo !== false;
-        includeUserMemory = cfg.includeUserMemory !== false;
-      } catch (e) {}
-    }
-
-    // 获取账号名用于文件名（与 claude.js 保持一致）
-    let accountName = 'claude';
-    if (ctx.baseUrl) {
-      try {
-        const profileResp = await fetchViaProxy(`${ctx.baseUrl}/api/account_profile`);
-        if (profileResp?.success) {
-          const rawName = profileResp.data?.display_name || profileResp.data?.full_name || '';
-          if (rawName) accountName = rawName.replace(/[<>:"\/\\|?*\x00-\x1F]/g, '_').replace(/\s+/g, '_').trim() || 'claude';
-        }
-      } catch (e) {}
-    }
 
     const totalCount = toExport.length;
     const userInput = prompt(`Found ${totalCount} conversations.\n\nHow many to export?`, totalCount.toString());
@@ -1384,84 +1345,19 @@ function App() {
     const { strToU8, zip } = await import('fflate');
     const zipEntries = {};
     const convsToExport = toExport.slice(0, exportCount);
-    const BATCH = 25;
 
-    for (let i = 0; i < convsToExport.length; i += BATCH) {
-      const batch = convsToExport.slice(i, i + BATCH);
-      await Promise.allSettled(batch.map(async (conv) => {
-        try {
-          let jsonStr;
-          if (conv._zipData) {
-            // zip 导入模式：使用本地数据
-            jsonStr = conv._zipData;
-          } else if (ctx?.userId && ctx?.baseUrl) {
-            const resp = await fetchViaProxy(`${ctx.baseUrl}/api/organizations/${ctx.userId}/chat_conversations/${conv.uuid}`);
-            if (!resp?.success) return;
-            const data = resp.data;
-            if (conv.project_uuid) data.project_uuid = conv.project_uuid;
-            if (conv.project) data.project = conv.project;
-            jsonStr = JSON.stringify(data, null, 2);
-          } else return;
-          const title = (conv.name || conv.uuid).replace(/[<>:"\/\\|?*\x00-\x1F]/g, '');
-          zipEntries[`claude_${conv.uuid.substring(0, 8)}_${title}.json`] = strToU8(jsonStr);
-        } catch (e) {}
-      }));
-    }
-
-    if (includeProjectInfo || includeUserMemory) {
-      const projectsJson = { exported_at: new Date().toISOString(), organization_id: ctx.userId, user_instructions: '', global_memory: null, projects: [] };
-      if (includeUserMemory) {
-        try {
-          const [profileResp, memResp] = await Promise.all([
-            fetchViaProxy(`${ctx.baseUrl}/api/account_profile`),
-            fetchViaProxy(`${ctx.baseUrl}/api/organizations/${ctx.userId}/memory`)
-          ]);
-          projectsJson.user_instructions = profileResp?.success ? (profileResp.data?.conversation_preferences || '') : '';
-          projectsJson.global_memory = memResp?.success ? memResp.data : null;
-        } catch (e) {}
+    convsToExport.forEach((conv) => {
+      let jsonStr = null;
+      if (conv._zipData) {
+        jsonStr = conv._zipData;
+      } else if (conv._archiveBundle) {
+        jsonStr = JSON.stringify(conv._archiveBundle, null, 2);
       }
-      if (includeProjectInfo) {
-        const projectUuids = [...new Set(convsToExport.map(c => c.project_uuid).filter(Boolean))];
-        for (const projUuid of projectUuids) {
-          try {
-            const [detailResp, memoryResp, filesResp] = await Promise.all([
-              fetchViaProxy(`${ctx.baseUrl}/api/organizations/${ctx.userId}/projects/${projUuid}`),
-              fetchViaProxy(`${ctx.baseUrl}/api/organizations/${ctx.userId}/memory?project_uuid=${projUuid}`),
-              fetchViaProxy(`${ctx.baseUrl}/api/organizations/${ctx.userId}/projects/${projUuid}/docs`)
-            ]);
-            const detail = detailResp?.success ? detailResp.data : null;
-            const memory = memoryResp?.success ? memoryResp.data : null;
-            const files = (filesResp?.success && Array.isArray(filesResp.data)) ? filesResp.data : [];
-            const knowledgeFiles = [];
-            if (files.length > 0) {
-              const fileResults = await Promise.allSettled(
-                files.map(f =>
-                  fetchViaProxy(`${ctx.baseUrl}/api/organizations/${ctx.userId}/projects/${projUuid}/docs/${f.uuid}`)
-                    .then(r => ({ name: f.file_name || f.uuid, content: r?.success ? (r.data?.content || r.data) : null }))
-                )
-              );
-              for (const r of fileResults) {
-                if (r.status === 'fulfilled' && r.value.content) {
-                  const content = typeof r.value.content === 'string' ? r.value.content : JSON.stringify(r.value.content);
-                  const safeName = r.value.name.replace(/[<>:"\/\\|?*\x00-\x1F]/g, '');
-                  const zipPath = `projects_${projUuid.substring(0, 8)}_${safeName}`;
-                  zipEntries[zipPath] = strToU8(content);
-                  knowledgeFiles.push(zipPath);
-                }
-              }
-            }
-            const projName = convsToExport.find(c => c.project_uuid === projUuid)?.project?.name || projUuid;
-            projectsJson.projects.push({
-              uuid: projUuid, name: projName,
-              description: detail?.description || '', instructions: detail?.prompt_template || '',
-              memory: memory?.memory || '', memory_updated_at: memory?.updated_at || null,
-              archived: detail?.archived || false, knowledge_files: knowledgeFiles
-            });
-          } catch (e) {}
-        }
-      }
-      zipEntries[`${ctx.userId}_projects.json`] = strToU8(JSON.stringify(projectsJson, null, 2));
-    }
+      if (!jsonStr) return;
+      const title = sanitizeLocalFilename(conv.name || conv.uuid || 'conversation');
+      const provider = conv.platform || conv.format || 'loominary';
+      zipEntries[`${provider}_${String(conv.uuid || title).substring(0, 8)}_${title}.json`] = strToU8(jsonStr);
+    });
 
     // 导出重命名信息（仅 zip 模式下有效的重命名）
     if (hasZipData) {
@@ -1487,7 +1383,7 @@ function App() {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `claude_${accountName}_${exportCount === totalCount ? 'all' : 'recent_' + exportCount}_${new Date().toISOString().slice(0, 10)}.zip`;
+        a.download = `loominary_local_${exportCount === totalCount ? 'all' : 'recent_' + exportCount}_${new Date().toISOString().slice(0, 10)}.zip`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -1495,7 +1391,7 @@ function App() {
         resolve();
       });
     });
-  }, [browseAllCards]);
+  }, [browseAllCards, hasZipData]);
 
   // 从 zip 文件导入完整对话数据
   const handleZipImport = useCallback(async () => {
@@ -1616,7 +1512,7 @@ function App() {
         // 将 zip 中的 JSON 转为 File 对象加载，以支持全局搜索索引
         const zipFiles = cards.map(card => {
           const blob = new Blob([card._zipData], { type: 'application/json' });
-          const safeName = (card.name || card.uuid).replace(/[<>:"\/\\|?*\x00-\x1F]/g, '') + '.json';
+          const safeName = sanitizeLocalFilename(card.name || card.uuid) + '.json';
           return new File([blob], safeName, { type: 'application/json', lastModified: Date.now() });
         });
         if (zipFiles.length > 0) {
@@ -1634,111 +1530,8 @@ function App() {
 
   // 同步：对比 API 列表的 updated_at，只拉取有变化的对话
   const handleZipSync = useCallback(async () => {
-    const ctx = browseAllContextRef.current;
-    if (!ctx?.userId || !ctx?.baseUrl) {
-      console.warn('[Sync] 缺少 userId 或 baseUrl，无法同步');
-      return;
-    }
-
-    const fetchViaProxy = (url) => {
-      if (typeof chrome !== 'undefined' && chrome.runtime?.id) {
-        return new Promise(resolve =>
-          chrome.runtime.sendMessage({ type: 'LOOMINARY_FETCH', options: { url, method: 'GET', responseType: 'json' } }, resolve)
-        );
-      }
-      return fetch(url, { credentials: 'include' }).then(r => r.ok ? r.json().then(data => ({ success: true, data })) : { success: false });
-    };
-
-    try {
-      // 1. 获取远端对话列表
-      const listResp = await fetchViaProxy(`${ctx.baseUrl}/api/organizations/${ctx.userId}/chat_conversations`);
-      if (!listResp?.success || !Array.isArray(listResp.data)) {
-        console.error('[Sync] 获取对话列表失败');
-        return;
-      }
-      const remoteConvs = listResp.data;
-      const localMap = new Map(browseAllCards.map(c => [c.uuid, c]));
-
-      // 2. 找出需要更新的对话（远端 updated_at 更新 或 本地不存在）
-      const toUpdate = remoteConvs.filter(remote => {
-        const local = localMap.get(remote.uuid);
-        if (!local) return true; // 新对话
-        if (!local.updated_at || !remote.updated_at) return true;
-        return new Date(remote.updated_at) > new Date(local.updated_at);
-      });
-
-      console.log(`[Sync] 远端 ${remoteConvs.length} 个对话，本地 ${browseAllCards.length} 个，需更新 ${toUpdate.length} 个`);
-
-      if (toUpdate.length === 0) {
-        console.log('[Sync] 所有对话已是最新');
-        return;
-      }
-
-      // 3. 批量拉取需要更新的对话全文
-      const { strToU8 } = await import('fflate');
-      const BATCH = 25;
-      const updatedCards = new Map();
-
-      for (let i = 0; i < toUpdate.length; i += BATCH) {
-        const batch = toUpdate.slice(i, i + BATCH);
-        await Promise.allSettled(batch.map(async (conv) => {
-          try {
-            const resp = await fetchViaProxy(`${ctx.baseUrl}/api/organizations/${ctx.userId}/chat_conversations/${conv.uuid}`);
-            if (!resp?.success) return;
-            const data = resp.data;
-            if (conv.project_uuid) data.project_uuid = conv.project_uuid;
-            if (conv.project) data.project = conv.project;
-            const jsonStr = JSON.stringify(data, null, 2);
-            const parsed = extractChatData(data, conv.name || conv.uuid);
-            const meta = parsed.meta_info || {};
-            updatedCards.set(conv.uuid, {
-              type: 'conversation',
-              uuid: conv.uuid,
-              name: meta.title || data.name || conv.name || conv.uuid,
-              format: parsed.format || 'claude',
-              created_at: meta.created_at || data.created_at || conv.created_at || null,
-              updated_at: meta.updated_at || data.updated_at || conv.updated_at || null,
-              project: meta.project || data.project || conv.project || null,
-              project_uuid: meta.project_uuid || data.project_uuid || conv.project_uuid || null,
-              organization_id: ctx.userId,
-              platform: parsed.platform || 'claude',
-              messageCount: parsed.chat_history?.length || 0,
-              size: strToU8(jsonStr).length,
-              _zipData: jsonStr
-            });
-          } catch (e) {
-            console.warn('[Sync] 拉取对话失败:', conv.uuid, e);
-          }
-        }));
-        if (i + BATCH < toUpdate.length) {
-          await new Promise(r => setTimeout(r, 200));
-        }
-      }
-
-      // 4. 合并：更新已有卡片 + 新增卡片
-      setBrowseAllCards(prev => {
-        const merged = prev.map(card =>
-          updatedCards.has(card.uuid) ? updatedCards.get(card.uuid) : card
-        );
-        // 新增本地不存在的
-        for (const [uuid, card] of updatedCards) {
-          if (!localMap.has(uuid)) merged.push(card);
-        }
-        return merged;
-      });
-
-      // 同步后 _zipData 内容可能更新，清空 fileIndex 缓存避免展示旧数据
-      if (updatedCards.size > 0) {
-        for (const uuid of updatedCards.keys()) {
-          cardFileIndexMapRef.current.delete(uuid);
-        }
-      }
-
-      console.log(`[Sync] 同步完成，更新/新增 ${updatedCards.size} 个对话`);
-    } catch (err) {
-      console.error('[Sync] 同步失败:', err);
-    }
-  }, [browseAllCards]);
+    console.warn('[Sync] Provider API sync is disabled. Capture recent sidebar conversations from the extension to refresh local archives.');
+  }, []);
 
   const handleExportClick = async () => {
     if (!processedData) return;
@@ -1954,7 +1747,14 @@ function App() {
         setBrowseAllCurrentIndexRef.current(null);
 
         try {
-          if (payload.files && Array.isArray(payload.files)) {
+          if (payload.captureSnapshot || payload.archiveBundle) {
+            const archivePayload = payload.captureSnapshot || payload.archiveBundle;
+            pendingSelectIndexRef.current = 0;
+            fileActionsRef.current.loadArchivePayloads([archivePayload], { replace: true });
+          } else if (Array.isArray(payload.captureSnapshots)) {
+            pendingSelectIndexRef.current = 0;
+            fileActionsRef.current.loadArchivePayloads(payload.captureSnapshots, { replace: true });
+          } else if (payload.files && Array.isArray(payload.files)) {
             // 多文件（ST 分支模式）
             const fileObjs = payload.files.map(({ content, filename }) => {
               const blob = new Blob([typeof content === 'string' ? content : JSON.stringify(content)], { type: 'application/jsonl' });
@@ -2000,7 +1800,16 @@ function App() {
       }
       dataLoadedRef.current = true;
       try {
-        if (pendingData.files && Array.isArray(pendingData.files)) {
+        if (pendingData.captureSnapshot || pendingData.archiveBundle) {
+          const archivePayload = pendingData.captureSnapshot || pendingData.archiveBundle;
+          pendingSelectIndexRef.current = 0;
+          fileActionsRef.current.loadArchivePayloads([archivePayload], { replace: true });
+          console.log('[Loominary] DOM capture archive loaded successfully');
+        } else if (Array.isArray(pendingData.captureSnapshots)) {
+          pendingSelectIndexRef.current = 0;
+          fileActionsRef.current.loadArchivePayloads(pendingData.captureSnapshots, { replace: true });
+          console.log('[Loominary] Loaded', pendingData.captureSnapshots.length, 'DOM capture archives');
+        } else if (pendingData.files && Array.isArray(pendingData.files)) {
           // Multi-file: ST branches — use merged JSONL loading pipeline
           const fileObjs = pendingData.files.map(({ content, filename }) => {
             const data = typeof content === 'string' ? content : JSON.stringify(content);

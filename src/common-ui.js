@@ -388,20 +388,6 @@
             if (State.currentPlatform === 'claude') {
                 ClaudeHandler.addUI(controls);
                 ClaudeHandler.addButtons(controls);
-
-                const inputLabel = document.createElement('div');
-                inputLabel.className = 'loominary-input-trigger';
-                inputLabel.textContent = `${i18n.t('manualUserId')}`;
-                inputLabel.addEventListener('click', () => {
-                    const newId = prompt(i18n.t('enterUserId'), State.capturedUserId);
-                    if (newId?.trim()) {
-                        State.capturedUserId = newId.trim();
-                        localStorage.setItem('claudeUserId', State.capturedUserId);
-                        alert(i18n.t('userIdSaved'));
-                        UI.recreatePanel();
-                    }
-                });
-                controls.appendChild(inputLabel);
             }
             // #platform: chatgpt
             if (State.currentPlatform === 'chatgpt') {
